@@ -1,0 +1,35 @@
+diff --git a/qwen_omni_utils/v2_5/vision_process.py b/qwen_omni_utils/v2_5/vision_process.py
+--- a/qwen_omni_utils/v2_5/vision_process.py
++++ b/qwen_omni_utils/v2_5/vision_process.py
+@@ -212,1 +212,27 @@
+-    total_frames, video_fps = video.size(0), info["video_fps"]
++    source_total_frames = int(video.size(0))
++    try:
++        video_fps = float(info.get("video_fps") or 0.0)
++    except (TypeError, ValueError):
++        video_fps = 0.0
++    if not math.isfinite(video_fps) or video_fps <= 0.0:
++        video_fps = float(ele.get("fps", FPS) or FPS)
++    padded_single_frame = source_total_frames == 1
++    fallback_from_empty = False
++    if source_total_frames == 0:
++        full_video, _, full_info = io.read_video(
++            video_path, start_pts=0.0, end_pts=None, pts_unit="sec", output_format="TCHW"
++        )
++        full_total_frames = int(full_video.size(0))
++        if full_total_frames <= 0:
++            raise ValueError(f"torchvision returned no frames for video={video_path!r}")
++        video_fps = float(full_info.get("video_fps") or video_fps or FPS)
++        nearest_index = int(round(float(ele.get("video_start", 0.0) or 0.0) * video_fps))
++        nearest_index = min(max(nearest_index, 0), full_total_frames - 1)
++        video = full_video[nearest_index : nearest_index + 1]
++        source_total_frames = 1
++        padded_single_frame = True
++        fallback_from_empty = True
++    total_frames = source_total_frames
++    if padded_single_frame:
++        video = torch.cat((video, video[-1:]), dim=0)
++        total_frames = FRAME_FACTOR
+@@ -222,1 +248,1 @@
+-        total_num_frames=total_frames,
++        total_num_frames=source_total_frames,

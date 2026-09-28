@@ -1,0 +1,162 @@
+Metadata-Version: 2.4
+Name: omni-opsd
+Version: 0.1.0
+Summary: Golden-evidence conditioned Omni video understanding and multi-view OPSD research
+Requires-Python: <3.13,>=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: numpy<3,>=1.26
+Requires-Dist: Pillow<12,>=10
+Requires-Dist: PyYAML<7,>=6
+Requires-Dist: huggingface-hub<2,>=0.34
+Provides-Extra: media
+Requires-Dist: decord>=0.6; extra == "media"
+Requires-Dist: opencv-python-headless>=4.9; extra == "media"
+Provides-Extra: analysis
+Requires-Dist: pandas>=2.1; extra == "analysis"
+Requires-Dist: pyarrow>=15; extra == "analysis"
+Requires-Dist: matplotlib>=3.8; extra == "analysis"
+Requires-Dist: seaborn>=0.13; extra == "analysis"
+Provides-Extra: test
+Requires-Dist: pytest<10,>=8; extra == "test"
+Provides-Extra: vllm
+Requires-Dist: vllm==0.11.2; extra == "vllm"
+Requires-Dist: transformers==4.57.6; extra == "vllm"
+Provides-Extra: qwen25-training
+Requires-Dist: msgspec<1,>=0.18; extra == "qwen25-training"
+Requires-Dist: qwen-omni-utils==0.0.9; extra == "qwen25-training"
+
+# OmniOPSD training code bundle
+
+This bundle contains the code needed to build and run the four comparable
+Qwen2.5-Omni LoRA arms: SFT, GRPO, standard answer-privileged OPSD, and
+CLUE-OPSD. It also keeps the older VideoOdyssey matrix/evaluation entry points
+because they use the same arm launcher. Dataset files, raw videos, model
+weights, checkpoints, logs, and Python environments are intentionally absent.
+
+## What is in the bundle
+
+- `src/omni_opsd/`: data contracts, matrix row construction, MCQ rewards,
+  evaluation, and OPSD/GKD utility code.
+- `scripts/build_omnivideo_training_matrix.py`: turns a canonical
+  OmniVideo-100K manifest into four answer-isolated JSONL arms with identical
+  full-video student inputs.
+- `scripts/run_training_arm_a100.sh`: CUDA/A100 entry point for one arm.
+- `scripts/run_omnivideo_baseline_queue.sh`: smoke then full runs for a list
+  of arms on one host; its monitor supports both `nvidia-smi` and `npu-smi`.
+- `scripts/run_video_odyssey_training_arm.sh` and related builders/evaluators:
+  the VideoOdyssey-compatible path used by the same four arms.
+- `patches/`: bounded A/V compatibility patches and the generic rollout
+  protocol patch. The exact ms-swift feature commit is recorded in
+  `third_party_ms_swift_commit.txt`.
+
+## Environment on an A100 host
+
+Install a CUDA-compatible PyTorch build first, then install this package and
+the training-only dependencies. Do not install an Ascend/torch_npu wheel on
+the A100 host.
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip
+python -m pip install -e '.[qwen25-training,test]'
+python -m pip install -r requirements-training.txt
+```
+
+`ms-swift` is kept as an external checkout because it is a separate project:
+
+```bash
+git clone https://github.com/modelscope/ms-swift.git /data/ms-swift
+git -C /data/ms-swift checkout 960c5bf2cb070d1e3483ed93965f2e338d3ae93a
+git -C /data/ms-swift apply /path/to/OmniOPSD/patches/ms-swift-infer-protocol.patch
+```
+
+The pinned checkout already contains the `teacher_videos` and
+`clue_ema_alpha` support used by OPSD/CLUE-OPSD. The two local
+`ms-swift-qwen25-bounded-*.patch` files are historical fallbacks for a clean
+checkout before the pinned feature commits; applying them again to the pinned
+checkout is unnecessary and may report an already-applied patch.
+
+## Build the four OmniVideo arms
+
+The canonical JSONL must contain the selected rows and local video paths. Each
+row needs `sample_id`, `video_id`, `video_path`, `duration`, `question`, four
+`choices`, `answer`, and non-empty `evidence_spans`. The builder checks all
+media paths and enforces the fixed F1 contract.
+
+```bash
+export PYTHONPATH="$PWD/src"
+python scripts/build_omnivideo_training_matrix.py \
+  --canonical /data/omnivideo/gap5000.canonical.jsonl \
+  --output-dir /data/omnivideo/training_matrix \
+  --fps 2 --max-frames 768 --min-pixels 3136 --max-pixels 28672 \
+  --use-audio-in-video
+```
+
+The output directory contains `omnivideo_100k_train.{sft,grpo,opsd,clue_opsd}.jsonl`
+and `training_matrix_summary.json`. The student side is the same full video
+and prompt in all four files. SFT puts the answer in the assistant target;
+GRPO puts it only in `solution`; OPSD gives it only to the full-video teacher;
+CLUE-OPSD gives the teacher evidence-interval videos without the answer.
+
+## Run one arm on CUDA/A100
+
+Set the data, model, ms-swift, and Python dependency paths, then choose the
+number of visible GPUs. The wrapper mirrors `CUDA_VISIBLE_DEVICES` into the
+legacy device-count check; PyTorch still uses CUDA normally.
+
+```bash
+export CUDA_VISIBLE_DEVICES=0,1,2,3
+export OMNI_OPSD_MODEL=/data/models/Qwen2.5-Omni-7B
+export OMNI_OPSD_MS_SWIFT_ROOT=/data/ms-swift
+export OMNI_OPSD_PYTHON_DEPS="$PWD"       # or a site-packages directory
+export OMNI_OPSD_DATASET=/data/omnivideo/training_matrix/omnivideo_100k_train.sft.jsonl
+export OMNI_OPSD_OUTPUT_DIR=/data/runs/omnivideo_sft
+export OMNI_OPSD_MAX_STEPS=300
+export OMNI_OPSD_ATTN_IMPL=sdpa
+export OMNI_OPSD_GKD_SAFE_MODE=0          # normal CUDA gradient clipping
+export USE_AUDIO_IN_VIDEO=1
+
+bash scripts/run_training_arm_a100.sh sft
+```
+
+For the other arms, change the positional arm, dataset suffix, and output
+directory to `grpo`, `opsd`, or `clue_opsd`. A one-step run is recommended
+before a long run (`OMNI_OPSD_MAX_STEPS=1`). `opsd` and `clue_opsd` use the
+LoRA-shadow EMA teacher mode exposed by the pinned ms-swift commit; this is a
+LoRA implementation and is recorded as `paper_exact=false` by the launcher.
+
+On an eight-GPU A100 host, the queue can run all four arms sequentially after
+the matrix is built:
+
+```bash
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export ASCEND_RT_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES"  # count check only
+export OMNI_OPSD_PROJECT_ROOT="$PWD"
+export OMNI_OPSD_QUEUE_ROOT=/data/runs/omnivideo_queue
+export OMNI_OPSD_MATRIX_DATASET_ROOT=/data/omnivideo/training_matrix
+export OMNI_OPSD_MODEL=/data/models/Qwen2.5-Omni-7B
+export OMNI_OPSD_MS_SWIFT_ROOT=/data/ms-swift
+export OMNI_OPSD_PYTHON_DEPS="$PWD"
+export OMNI_OPSD_QUEUE_ARMS=sft,grpo,opsd,clue_opsd
+bash scripts/run_omnivideo_baseline_queue.sh
+```
+
+The queue first performs one-step smoke runs and skips a full arm if its smoke
+fails. It writes a per-arm `RUN_CLASSIFICATION.txt`, logs, and completion
+markers under `OMNI_OPSD_QUEUE_ROOT`.
+
+## Checks before handing the bundle to another machine
+
+```bash
+PYTHONPATH=.:src pytest -q \
+  tests/test_swift_opsd_dataset.py \
+  tests/test_rewards.py \
+  tests/test_evaluation.py \
+  tests/test_materialize_local_training_matrix.py
+bash -n scripts/run_training_arm_a100.sh scripts/run_omnivideo_baseline_queue.sh
+```
+
+The training code never bundles or downloads model/media assets. Copy the
+canonical matrix inputs and raw videos to the A100 host separately, and keep
+their checksums with the run metadata.

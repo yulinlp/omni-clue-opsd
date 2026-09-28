@@ -1,0 +1,12 @@
+{
+  "fsdp": "full_shard auto_wrap",
+  "fsdp_config": {
+    "fsdp_version": 2,
+    "reshard_after_forward": true,
+    "auto_wrap_policy": "SIZE_BASED_WRAP",
+    "min_num_params": 1000000,
+    "cpu_ram_efficient_loading": true,
+    "state_dict_type": "SHARDED_STATE_DICT",
+    "activation_checkpointing": true
+  }
+}

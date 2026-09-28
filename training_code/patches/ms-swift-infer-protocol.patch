@@ -1,0 +1,16 @@
+diff --git a/swift/infer_engine/protocol.py b/swift/infer_engine/protocol.py
+index df28694..b8f0ea1 100644
+--- a/swift/infer_engine/protocol.py
++++ b/swift/infer_engine/protocol.py
+@@ -87,7 +87,10 @@ class InferRequest:
+ 
+     images: List[Union[str, Image.Image]] = field(default_factory=list)
+     audios: List[str] = field(default_factory=list)
+-    videos: List[str] = field(default_factory=list)
++    # OmniVideo rows carry per-sample video_start/video_end/fps/max_frames/
++    # max_pixels mappings.  The Qwen-Omni template consumes these mappings,
++    # while the generic rollout protocol used to reject them as List[str].
++    videos: List[Any] = field(default_factory=list)
+ 
+     tools: Optional[List[Tool]] = None
+     objects: Dict[str, Any] = field(default_factory=dict)

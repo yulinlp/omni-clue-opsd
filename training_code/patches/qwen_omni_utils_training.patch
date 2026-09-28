@@ -1,0 +1,7 @@
+diff --git a/qwen_omni_utils/v2_5/vision_process.py b/qwen_omni_utils/v2_5/vision_process.py
+--- a/qwen_omni_utils/v2_5/vision_process.py
++++ b/qwen_omni_utils/v2_5/vision_process.py
+@@ -32,3 +32,3 @@ FPS_MIN_FRAMES = 4
+ FPS_MAX_FRAMES = 768
+-MAX_NUM_WORKERS_FETCH_VIDEO = 8
++MAX_NUM_WORKERS_FETCH_VIDEO = int(os.environ.get("MAX_NUM_WORKERS_FETCH_VIDEO", "8"))

@@ -1,0 +1,306 @@
+diff --git a/swift/arguments/rlhf_args.py b/swift/arguments/rlhf_args.py
+index 8b1097c35..c47679dbe 100644
+--- a/swift/arguments/rlhf_args.py
++++ b/swift/arguments/rlhf_args.py
+@@ -223,7 +223,9 @@ class RLHFArguments(TeacherModelArguments, GRPOArguments, PPOArguments, RewardMo
+         seq_kd (bool): Deprecated. Sequential KD (teacher-generated responses) is not implemented.
+         gkd_logits_topk (Optional[int]): The number of top-k logits to use for KL divergence computation in GKD.
+             If None, uses full vocabulary for KL computation (more accurate but memory-intensive).
+-            If set to a positive integer, only top-k teacher logits are used (more efficient).
++            If set to a positive integer for a local teacher, the student top-k IDs, the teacher values at
++            those IDs, and one residual tail-mass bucket are used (paper-style and more efficient). For a
++            teacher model server, the value is passed to the server's top-logprobs request.
+             When using `teacher_model_server`, this is limited by the server's `max_logprobs` setting
+             (vLLM default is 20, can be increased with `--max-logprobs`). Defaults to None.
+         max_new_tokens (Optional[int]): A backward-compatibility argument. Please use `max_completion_length` instead.
+diff --git a/swift/rlhf_trainers/gkd_loss.py b/swift/rlhf_trainers/gkd_loss.py
+index 82ae2f25d..04ec0800b 100644
+--- a/swift/rlhf_trainers/gkd_loss.py
++++ b/swift/rlhf_trainers/gkd_loss.py
+@@ -22,11 +22,22 @@ class DataSource(str, Enum):
+ class TeacherOutput:
+     """Unified container for teacher model outputs from all three sources:
+     local full-vocab, local top-k, and external API top-k.
++
++    ``topk_logprobs``/``topk_indices`` are kept for compatibility with the
++    existing teacher API and Megatron paths.  The local full-vocabulary path
++    can additionally carry the student's probabilities and one tail bucket so
++    that the compressed loss follows the paper's top-K construction exactly.
+     """
+     full_logits: Optional[torch.Tensor] = None
+     topk_logprobs: Optional[torch.Tensor] = None
+     topk_indices: Optional[torch.Tensor] = None
+     labels: Optional[torch.Tensor] = None
++    # Exact paper-style compressed distributions.  These fields are populated
++    # only when ``to_topk`` receives the student logits.  All values are
++    # log-probabilities, including the two tail buckets.
++    student_topk_logprobs: Optional[torch.Tensor] = None
++    student_tail_logprob: Optional[torch.Tensor] = None
++    teacher_tail_logprob: Optional[torch.Tensor] = None
+ 
+     @property
+     def is_topk_mode(self) -> bool:
+@@ -35,7 +46,9 @@ class TeacherOutput:
+     def to_device(self, device) -> 'TeacherOutput':
+         """Move all tensor fields to ``device`` in place (Ray: teacher_output is
+         collated on the CPU driver, moved to the GPU worker before forward)."""
+-        for name in ('full_logits', 'topk_logprobs', 'topk_indices', 'labels'):
++        for name in (
++                'full_logits', 'topk_logprobs', 'topk_indices', 'labels',
++                'student_topk_logprobs', 'student_tail_logprob', 'teacher_tail_logprob'):
+             v = getattr(self, name)
+             if isinstance(v, torch.Tensor):
+                 setattr(self, name, v.to(device))
+@@ -53,14 +66,92 @@ class TeacherOutput:
+             topk_logprobs=self.topk_logprobs[mask] if self.topk_logprobs is not None else None,
+             topk_indices=self.topk_indices[mask] if self.topk_indices is not None else None,
+             labels=self.labels[mask] if self.labels is not None else None,
++            student_topk_logprobs=(self.student_topk_logprobs[mask]
++                                  if self.student_topk_logprobs is not None else None),
++            student_tail_logprob=(self.student_tail_logprob[mask]
++                                  if self.student_tail_logprob is not None else None),
++            teacher_tail_logprob=(self.teacher_tail_logprob[mask]
++                                  if self.teacher_tail_logprob is not None else None),
+         )
+ 
+-    def to_topk(self, k: int, topk_fn=None) -> 'TeacherOutput':
+-        """Convert full logits to topk representation."""
++    @property
++    def has_tail_mass(self) -> bool:
++        """Whether this output contains the exact student/teacher tail buckets."""
++        return (self.is_topk_mode and self.student_topk_logprobs is not None
++                and self.student_tail_logprob is not None and self.teacher_tail_logprob is not None)
++
++    def to_topk(self,
++                k: int,
++                topk_fn=None,
++                *,
++                student_logits: Optional[torch.Tensor] = None,
++                temperature: float = 1.0) -> 'TeacherOutput':
++        """Convert full logits to a compressed top-K representation.
++
++        When ``student_logits`` is supplied, select token IDs from the student
++        distribution and retain matching teacher probabilities plus one tail
++        probability for each side.  This is the construction described in the
++        OPSD paper.  Without student logits, retain the legacy teacher-only
++        representation used by external teacher APIs and Megatron.
++        """
+         if self.is_topk_mode:
+             return self
++
++        if self.full_logits is None:
++            raise ValueError('Cannot convert a teacher output without full logits to top-k.')
++        if not isinstance(k, int) or k <= 0:
++            raise ValueError(f'top-k must be a positive integer, got {k!r}')
++        if not isinstance(temperature, (int, float)) or temperature <= 0:
++            raise ValueError(f'temperature must be positive, got {temperature!r}')
++
++        # The paper selects IDs from the student distribution.  Student and
++        # teacher sequence lengths can differ in ordinary OPSD because the
++        # teacher prompt contains the privileged answer, so this method is
++        # called after response-token masking and expects matching [N, V]
++        # active tensors.
++        if student_logits is not None:
++            if student_logits.shape != self.full_logits.shape:
++                raise ValueError(
++                    'student_logits and teacher full_logits must have the same shape after '
++                    f'active-token extraction, got {tuple(student_logits.shape)} and '
++                    f'{tuple(self.full_logits.shape)}')
++            vocab_size = student_logits.shape[-1]
++            k = min(k, vocab_size)
++            # Use float32 for stable log-sum-exp and tail subtraction while
++            # retaining the gradient path through the student logits.
++            student_scaled = student_logits.float() / float(temperature)
++            # Teacher probabilities are targets; never create a gradient path
++            # through the teacher even when a caller did not wrap its forward
++            # in ``torch.no_grad()``.
++            teacher_scaled = self.full_logits.float().detach() / float(temperature)
++            student_lse = torch.logsumexp(student_scaled, dim=-1, keepdim=True)
++            teacher_lse = torch.logsumexp(teacher_scaled, dim=-1, keepdim=True)
++            _, ids = torch.topk(student_scaled, k=k, dim=-1)
++            student_top = torch.gather(student_scaled, dim=-1, index=ids) - student_lse
++            teacher_top = torch.gather(teacher_scaled, dim=-1, index=ids) - teacher_lse
++
++            # Convert the omitted probability mass into one extra category.
++            # Clamp only for the zero-mass numerical edge case; gradients are
++            # preserved whenever a non-zero tail exists.
++            tiny = torch.finfo(student_top.dtype).tiny
++            student_top_mass = torch.exp(student_top).sum(dim=-1)
++            teacher_top_mass = torch.exp(teacher_top).sum(dim=-1)
++            student_tail = (1.0 - student_top_mass).clamp_min(tiny).log()
++            teacher_tail = (1.0 - teacher_top_mass).clamp_min(tiny).log()
++            return TeacherOutput(
++                topk_logprobs=teacher_top,
++                topk_indices=ids,
++                labels=self.labels,
++                student_topk_logprobs=student_top,
++                student_tail_logprob=student_tail,
++                teacher_tail_logprob=teacher_tail,
++            )
++
++        # Legacy teacher-only representation.  Existing callers expect the
++        # selected values to be logits (the loss applies log_softmax over the
++        # selected entries), so preserve that behavior here.
+         fn = topk_fn or (lambda logits, k: torch.topk(logits, k=k, dim=-1))
+-        vals, ids = fn(self.full_logits, k)
++        vals, ids = fn(self.full_logits, min(k, self.full_logits.shape[-1]))
+         return TeacherOutput(
+             topk_logprobs=vals,
+             topk_indices=ids,
+@@ -91,6 +182,45 @@ def default_gather(logits: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
+ # ---------------------------------------------------------------------------
+ 
+ 
++def _jsd_from_log_probs(
++    student_log_probs: torch.Tensor,
++    teacher_log_probs: torch.Tensor,
++    beta: float,
++    kl_div_fn: Callable = default_kl_div,
++) -> torch.Tensor:
++    """Return per-position JSD for already-normalized log probabilities.
++
++    This is used by the paper-style top-K path, where the retained tokens and
++    the tail bucket are already normalized together.  Keeping this separate
++    from :func:`jsd_loss` avoids applying a second softmax over the compressed
++    support (which would incorrectly discard the tail mass).
++    """
++    if student_log_probs.shape != teacher_log_probs.shape:
++        raise ValueError(
++            'student and teacher log-probability tensors must have the same shape, got '
++            f'{tuple(student_log_probs.shape)} and {tuple(teacher_log_probs.shape)}')
++    if beta < 0 or beta > 1:
++        raise ValueError(f'beta must be in [0, 1], got {beta!r}')
++
++    if beta == 0:
++        return kl_div_fn(student_log_probs, teacher_log_probs)
++    if beta == 1:
++        return kl_div_fn(teacher_log_probs, student_log_probs)
++
++    beta_t = torch.as_tensor(beta, dtype=student_log_probs.dtype, device=student_log_probs.device)
++    log_beta = torch.log(beta_t)
++    log_1_minus_beta = torch.log1p(-beta_t)
++    mixture_log_probs = torch.logsumexp(
++        torch.stack([
++            student_log_probs + log_1_minus_beta,
++            teacher_log_probs + log_beta,
++        ]),
++        dim=0,
++    )
++    return (beta_t * kl_div_fn(mixture_log_probs, teacher_log_probs)
++            + (1 - beta_t) * kl_div_fn(mixture_log_probs, student_log_probs))
++
++
+ def jsd_loss(
+     s_logits: torch.Tensor,
+     t_logits: torch.Tensor,
+@@ -123,25 +253,12 @@ def jsd_loss(
+ 
+     total = s_logits.new_zeros(())
+ 
+-    if beta != 0 and beta != 1:
+-        beta_t = torch.tensor(beta, dtype=s_logits.dtype, device=s_logits.device)
+-        log_beta = torch.log(beta_t)
+-        log_1_minus_beta = torch.log1p(-beta_t)
+-    else:
+-        beta_t = log_beta = log_1_minus_beta = None
+-
+     for start in range(0, N, chunk_size):
+         end = min(start + chunk_size, N)
+         s_log = log_softmax_fn(s_logits[start:end])
+         t_log = log_softmax_fn(t_logits[start:end])
+ 
+-        if beta == 0:
+-            jsd = kl_div_fn(s_log, t_log)
+-        elif beta == 1:
+-            jsd = kl_div_fn(t_log, s_log)
+-        else:
+-            m_log = torch.logsumexp(torch.stack([s_log + log_1_minus_beta, t_log + log_beta]), dim=0)
+-            jsd = beta_t * kl_div_fn(m_log, t_log) + (1 - beta_t) * kl_div_fn(m_log, s_log)
++        jsd = _jsd_from_log_probs(s_log, t_log, beta, kl_div_fn)
+ 
+         total = total + jsd.sum()
+ 
+@@ -231,6 +348,7 @@ def gkd_loss(
+     log_softmax_fn: Callable = default_log_softmax,
+     kl_div_fn: Callable = default_kl_div,
+     chunk_size: int = 512,
++    topk: Optional[int] = None,
+ ) -> Tuple[torch.Tensor, torch.Tensor]:
+     """Full GKD loss pipeline. Returns (total_loss, num_valid).
+ 
+@@ -247,6 +365,9 @@ def gkd_loss(
+         log_softmax_fn: logits -> log_probs (may be TP-aware for full-vocab)
+         kl_div_fn: (input_log, target_log) -> per_position KL (may be TP-aware)
+         chunk_size: chunk size for memory efficiency
++        topk: optional paper-style top-K value.  When provided and the teacher
++            has local full logits, token IDs are selected from the student
++            distribution and both sides receive an explicit tail bucket.
+ 
+     Returns:
+         (total_loss, num_valid) — unnormalized total and count of valid positions.
+@@ -254,18 +375,31 @@ def gkd_loss(
+     teacher_output.validate()
+     s_active, t_active, num_valid = extract_active(student_logits, teacher_output, labels)
+ 
+-    if t_active.is_topk_mode:
++    # Convert after masking.  Ordinary OPSD adds the privileged answer to the
++    # teacher prompt, so student and teacher sequence lengths/positions need
++    # not match before response-token extraction.
++    if topk is not None and t_active.full_logits is not None:
++        t_active = t_active.to_topk(topk, student_logits=s_active, temperature=temperature)
++
++    if t_active.has_tail_mass:
++        student_log_probs = torch.cat(
++            [t_active.student_topk_logprobs, t_active.student_tail_logprob.unsqueeze(-1)], dim=-1)
++        teacher_log_probs = torch.cat(
++            [t_active.topk_logprobs, t_active.teacher_tail_logprob.unsqueeze(-1)], dim=-1)
++        total = _jsd_from_log_probs(student_log_probs, teacher_log_probs, beta).sum()
++    elif t_active.is_topk_mode:
+         s_logits = gather_fn(s_active, t_active.topk_indices)
+         t_logits = t_active.topk_logprobs
+         lsf, kdf = default_log_softmax, default_kl_div
++        s_logits = s_logits / temperature
++        t_logits = t_logits / temperature
++        total = jsd_loss(s_logits, t_logits, beta, lsf, kdf, chunk_size)
+     else:
+         s_logits = s_active
+         t_logits = t_active.full_logits
+         s_logits, t_logits = _align_vocab(s_logits, t_logits)
+         lsf, kdf = log_softmax_fn, kl_div_fn
+-
+-    s_logits = s_logits / temperature
+-    t_logits = t_logits / temperature
+-
+-    total = jsd_loss(s_logits, t_logits, beta, lsf, kdf, chunk_size)
++        s_logits = s_logits / temperature
++        t_logits = t_logits / temperature
++        total = jsd_loss(s_logits, t_logits, beta, lsf, kdf, chunk_size)
+     return total, num_valid
+diff --git a/swift/rlhf_trainers/gkd_trainer.py b/swift/rlhf_trainers/gkd_trainer.py
+index f997bfc7c..c6f62452f 100644
+--- a/swift/rlhf_trainers/gkd_trainer.py
++++ b/swift/rlhf_trainers/gkd_trainer.py
+@@ -106,9 +106,20 @@ class GKDTrainer(RolloutTrainerMixin, SwiftMixin, HFGKDTrainer):
+         """Compute JSD loss. teacher_output.labels is always set (equals student labels when non-OPSD)."""
+         shifted_labels = torch.roll(labels, shifts=-1, dims=1)
+         teacher_output.labels = torch.roll(teacher_output.labels, shifts=-1, dims=1)
+-        if self.gkd_logits_topk is not None:
+-            teacher_output = teacher_output.to_topk(self.gkd_logits_topk)
+-        total, num_valid = gkd_loss(student_logits, teacher_output, shifted_labels, self.beta, self.temperature)
++        # gkd_loss performs top-K conversion after extracting active response
++        # tokens.  OPSD teacher prompts contain privileged answer text and can
++        # therefore have a different sequence length from the student prompt;
++        # converting before masking would pair the wrong positions.  The
++        # conversion also receives student logits so it can construct the
++        # paper-style student-selected support and tail bucket.
++        total, num_valid = gkd_loss(
++            student_logits,
++            teacher_output,
++            shifted_labels,
++            self.beta,
++            self.temperature,
++            topk=self.gkd_logits_topk,
++        )
+         if num_valid == 0:
+             return total * 0
+         return total / num_valid

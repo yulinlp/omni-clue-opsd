@@ -1,0 +1,24 @@
+diff --git a/swift/template/templates/qwen.py b/swift/template/templates/qwen.py
+--- a/swift/template/templates/qwen.py
++++ b/swift/template/templates/qwen.py
+@@ -912,7 +912,18 @@ class Qwen2_5OmniTemplate(Qwen2_5VLTemplate):
+                 return ['<|vision_start|><|image_pad|><|vision_end|>']
+         elif media_type == 'audio':
+-            if self.mode != 'vllm':
+-                inputs.audios[index] = load_audio(inputs.audios[index], sampling_rate)
++            audio = inputs.audios[index]
++            if isinstance(audio, dict):
++                # Atomic modality controls need audio_start/audio_end without
++                # materializing lossy temporary clips.  Use the official
++                # offset-aware loader and pass the decoded waveform onward.
++                from qwen_omni_utils import process_audio_info
++                message = {'role': 'user', 'content': [{'type': 'audio', **audio}]}
++                bounded = process_audio_info([message], use_audio_in_video=False)
++                if bounded is None or len(bounded) != 1:
++                    raise ValueError(f'failed to extract mapped audio: {audio.get("audio")}')
++                inputs.audios[index] = bounded[0]
++            elif self.mode != 'vllm':
++                inputs.audios[index] = load_audio(audio, sampling_rate)
+             if self.version == 'omni_v2_5':
+                 return ['<|audio_bos|><|AUDIO|><|audio_eos|>']
+             elif self.version == 'omni_v3':

@@ -1,0 +1,29 @@
+diff --git a/swift/template/templates/qwen.py b/swift/template/templates/qwen.py
+index 5d69f6e..b1f6aae 100644
+--- a/swift/template/templates/qwen.py
++++ b/swift/template/templates/qwen.py
+@@ -937,10 +937,22 @@ class Qwen2_5OmniTemplate(Qwen2_5VLTemplate):
+             inputs.videos[index] = _video
+             if self.use_audio_in_video:
+                 if isinstance(video_source, list):  # image list
+                     raise ValueError('image list as video input does not support use_audio_in_video')
+                 if isinstance(video, dict):
+-                    raise ValueError('bounded audio extraction from a temporal video mapping is not implemented')
+-                audio = load_audio(video_source, sampling_rate)
++                    # Keep the audio interval identical to the structured video
++                    # mapping.  qwen_omni_utils already implements offset-aware
++                    # decoding for video_start/video_end; using load_audio(path)
++                    # here would silently expose the full source audio to a
++                    # clue-only Teacher and would also reject full mappings that
++                    # carry an explicit min/max-pixel sampling contract.
++                    from qwen_omni_utils import process_audio_info
++                    message = {'role': 'user', 'content': [{'type': 'video', **video}]}
++                    bounded = process_audio_info([message], use_audio_in_video=True)
++                    if bounded is None or len(bounded) != 1:
++                        raise ValueError(f'failed to extract mapped video audio: {video_source}')
++                    audio = bounded[0]
++                else:
++                    audio = load_audio(video_source, sampling_rate)
+                 if self.mode != 'vllm':
+                     inputs.audios.insert(inputs.audio_idx, (audio, 'video'))
+                 else:

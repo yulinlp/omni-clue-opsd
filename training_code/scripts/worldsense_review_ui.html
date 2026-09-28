@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WorldSense API 标注人工检查</title>
+<style>
+  :root {
+    --bg: #0f1420; --panel: #171d2c; --panel2: #1e2637; --line: #2a3348;
+    --text: #e6ebf5; --muted: #8b97ad; --accent: #4da3ff; --green: #35c98a;
+    --amber: #f0b429; --red: #ef5f5f; --gold: #ffd166;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.55 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+  header { display: flex; align-items: center; gap: 16px; padding: 10px 18px;
+           background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 10; }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  .tabs { display: flex; gap: 6px; margin-left: auto; }
+  .tabs button { background: transparent; color: var(--muted); border: 1px solid var(--line);
+                 padding: 5px 14px; border-radius: 999px; cursor: pointer; font-size: 13px; }
+  .tabs button.active { background: var(--accent); border-color: var(--accent); color: #06101f; font-weight: 600; }
+  main { display: block; }
+  #review { display: grid; grid-template-columns: 300px 1fr; gap: 14px; padding: 14px; }
+  aside { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+          max-height: calc(100vh - 90px); overflow: auto; }
+  .qitem { padding: 9px 12px; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .qitem:hover { background: var(--panel2); }
+  .qitem.active { background: #22304a; border-left: 3px solid var(--accent); }
+  .qitem .qid { font-size: 12px; font-family: ui-monospace, monospace; }
+  .qitem .meta { color: var(--muted); font-size: 11px; margin-top: 2px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; border: 1px solid var(--line); }
+  .badge.ok { color: var(--green); border-color: #1f5c42; }
+  .badge.warn { color: var(--amber); border-color: #6b5320; }
+  .badge.bad { color: var(--red); border-color: #6b2a2a; }
+  article { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .card h3 { margin: 0 0 8px; font-size: 13px; color: var(--muted); font-weight: 600;
+             display: flex; align-items: center; gap: 8px; }
+  .card h3 .spacer { margin-left: auto; }
+  .player { padding: 0; overflow: hidden; }
+  video { width: 100%; max-height: 46vh; background: #000; display: block; }
+  .timeline { position: relative; height: 34px; background: var(--panel2); cursor: pointer; border-top: 1px solid var(--line); }
+  .tl-seg { position: absolute; top: 7px; height: 20px; border-radius: 4px; }
+  .tl-evidence { background: rgba(53, 201, 138, .85); border: 1px solid #7df0bb; }
+  .tl-local { background: rgba(240, 180, 41, .35); border: 1px dashed var(--amber); top: 1px; height: 8px; }
+  .tl-view { background: rgba(77, 163, 255, .5); top: 27px; height: 6px; }
+  .playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--red); pointer-events: none; }
+  .controls { display: flex; align-items: center; gap: 8px; padding: 8px 10px; flex-wrap: wrap;
+              background: var(--panel); border-top: 1px solid var(--line); }
+  .controls button { background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+                     padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+  .controls button:hover { border-color: var(--accent); }
+  .controls .time { font-family: ui-monospace, monospace; color: var(--muted); font-size: 12px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .qa-question { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
+  .opt { padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 5px; }
+  .opt.gold { border-color: var(--gold); background: rgba(255, 209, 102, .08); }
+  .opt .letter { font-weight: 700; margin-right: 6px; }
+  .kv { display: grid; grid-template-columns: 110px 1fr; gap: 3px 10px; font-size: 13px; }
+  .kv .k { color: var(--muted); }
+  .mono { font-family: ui-monospace, monospace; font-size: 12px; }
+  .iv { display: inline-flex; align-items: center; gap: 6px; background: var(--panel2); border: 1px solid var(--line);
+        border-radius: 999px; padding: 2px 10px; margin: 2px 4px 2px 0; cursor: pointer; font-size: 12px; }
+  .iv:hover { border-color: var(--accent); }
+  .obs { white-space: pre-wrap; background: var(--panel2); border-radius: 8px; padding: 8px 10px; margin-top: 6px; font-size: 13px; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+  .scroll { max-height: 300px; overflow: auto; white-space: pre-wrap; font-size: 12.5px;
+            background: var(--panel2); border-radius: 8px; padding: 8px 10px; margin-top: 6px; }
+  .events { font-size: 12px; }
+  .events .row { display: flex; gap: 8px; padding: 2px 0; border-bottom: 1px dashed var(--line); }
+  .events .turn { color: var(--muted); width: 42px; }
+  .verdictbar { position: sticky; bottom: 0; background: var(--panel); border: 1px solid var(--line);
+                border-radius: 10px; padding: 10px 14px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .verdictbar button { border: 1px solid var(--line); background: var(--panel2); color: var(--text);
+                       padding: 6px 14px; border-radius: 8px; cursor: pointer; }
+  .verdictbar button.active { background: var(--accent); color: #06101f; border-color: var(--accent); font-weight: 600; }
+  .verdictbar input { flex: 1; min-width: 200px; background: var(--panel2); border: 1px solid var(--line);
+                      color: var(--text); border-radius: 8px; padding: 6px 10px; }
+  .saved { color: var(--green); font-size: 12px; }
+  #stats { padding: 14px; display: none; }
+  #stats.visible { display: block; }
+  .statgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; }
+  td.num, th.num { text-align: right; font-family: ui-monospace, monospace; }
+  .bar { height: 9px; background: var(--accent); border-radius: 3px; display: inline-block; vertical-align: middle; }
+  .bignum { font-size: 26px; font-weight: 700; }
+  .bignum small { font-size: 12px; color: var(--muted); font-weight: 400; }
+  .hint { color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>WorldSense API 标注人工检查 <span class="hint" id="runinfo"></span></h1>
+  <div class="tabs">
+    <div id="offlinebar" style="display:none;align-items:center;gap:8px;margin-right:10px">
+      <span class="badge warn">离线模式</span>
+      <button onclick="exportVerdicts()" style="background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:999px;padding:4px 12px;cursor:pointer;font-size:12px">导出判定 JSON</button>
+    </div>
+    <label class="hint" style="display:flex;align-items:center;gap:5px;margin-right:6px">
+      <input type="checkbox" id="orig" onchange="toggleOriginal(this.checked)"> 显示英文原文
+    </label>
+    <button id="tab-review" class="active" onclick="showTab('review')">人工检查</button>
+    <button id="tab-stats" onclick="showTab('stats')">统计</button>
+  </div>
+</header>
+
+<main>
+  <section id="review">
+    <aside id="qlist"></aside>
+    <article id="detail"><div class="card">加载中…</div></article>
+  </section>
+  <section id="stats"><div class="card">加载统计…</div></section>
+</main>
+
+<script>
+const OFFLINE = !!window.REVIEW_OFFLINE;
+const state = { items: [], idx: 0, verdicts: {}, activeIv: null, loop: false, runIdx: {},
+                reviewer: localStorage.getItem('reviewer') || '',
+                showOriginal: localStorage.getItem('showOriginal') === '1' };
+const $ = (id) => document.getElementById(id);
+const fmt = (t) => { if (t == null) return '—'; t = Math.max(0, t); const m = Math.floor(t/60), s = (t%60).toFixed(1).padStart(4,'0'); return `${m}:${s}`; };
+const esc = (s) => (s ?? '').toString().replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const tr = (zh, en) => state.showOriginal ? (en || zh || '') : (zh || en || '');
+function toggleOriginal(v) {
+  state.showOriginal = v;
+  localStorage.setItem('showOriginal', v ? '1' : '0');
+  renderDetail();
+}
+
+function showTab(name) {
+  $('tab-review').classList.toggle('active', name === 'review');
+  $('tab-stats').classList.toggle('active', name === 'stats');
+  $('review').style.display = name === 'review' ? 'grid' : 'none';
+  $('stats').classList.toggle('visible', name === 'stats');
+  if (name === 'stats' && !$('stats').dataset.loaded) loadStats();
+}
+
+async function boot() {
+  $('orig').checked = state.showOriginal;
+  if (OFFLINE) {
+    state.items = window.REVIEW_ITEMS || [];
+    try { state.verdicts = JSON.parse(localStorage.getItem('review_verdicts') || '{}'); } catch (e) { state.verdicts = {}; }
+    document.getElementById('offlinebar').style.display = 'flex';
+  } else {
+    const res = await fetch('/api/items');
+    const data = await res.json();
+    state.items = data.items || [];
+    const vres = await fetch('/api/verdicts');
+    for (const v of (await vres.json()).verdicts || []) state.verdicts[v.question_id] = v;
+  }
+  $('runinfo').textContent = `共 ${state.items.length} 题（抽样）`;
+  renderList();
+  renderDetail();
+}
+
+function renderList() {
+  $('qlist').innerHTML = state.items.map((it, i) => {
+    const v = state.verdicts[it.question_id];
+    const vb = v ? `<span class="badge ${v.verdict === 'sufficient' ? 'ok' : v.verdict === 'partial' ? 'warn' : 'bad'}">${verdictName(v.verdict)}</span>` : '';
+    const n = (it.annotation.clue_intervals || []).length;
+    return `<div class="qitem ${i === state.idx ? 'active' : ''}" onclick="select(${i})">
+      <div class="qid">${esc(it.question_id)}</div>
+      <div class="meta">
+        <span>${esc(it.qa.task_type || '?')}</span>
+        <span class="badge ${it.annotation.status === 'submitted' ? 'ok' : 'bad'}">${esc(it.annotation.status)}</span>
+        <span>${n} 段</span>${vb}
+      </div></div>`;
+  }).join('');
+}
+
+function verdictName(v) { return {sufficient: '充分', partial: '部分', insufficient: '不充分', unsure: '存疑'}[v] || v; }
+
+function select(i) { state.idx = i; state.activeIv = null; renderList(); renderDetail(); }
+
+function renderDetail() {
+  const it = state.items[state.idx];
+  if (!it) return;
+  const dur = it.video.duration_s || 0;
+  const runs = it.runs || [];
+  let ri = state.runIdx[it.question_id];
+  if (ri == null) { const p = runs.findIndex(r => r.primary); ri = p >= 0 ? p : 0; }
+  ri = Math.max(0, Math.min(ri, runs.length - 1));
+  state.runIdx[it.question_id] = ri;
+  const active = runs.length ? runs[ri] : null;
+  const anno = active ? active.annotation : it.annotation;
+  const events = active ? active.events : it.events;
+  const obsZh = active ? (active.annotation_zh || {}).observation_zh : it.annotation.observation_zh;
+  const ivs = anno.clue_intervals || [];
+  const views = (anno.media_views || []).filter(v => v && v.start != null);
+  const localIvs = (it.local && it.local.clue_intervals) || [];
+  const seg = (a, b, cls) => {
+    const left = dur ? (a / dur * 100) : 0, width = dur ? ((b - a) / dur * 100) : 0;
+    return `<div class="tl-seg ${cls}" style="left:${left}%;width:${Math.max(width, .4)}%" title="${fmt(a)} - ${fmt(b)}"></div>`;
+  };
+  const v = state.verdicts[it.question_id];
+  const v1api = it.v1 && it.v1.api, v1local = it.v1 && it.v1.local;
+  const v1badge = (r, tag) => r && r.any_correct != null
+    ? `<span class="badge ${r.any_correct ? 'ok' : 'bad'}">V1 ${tag}: ${r.any_correct ? '充分' : '不充分'}</span>` : '';
+
+  $('detail').innerHTML = `
+    <div class="card player">
+      <video id="video" controls preload="metadata" src="${OFFLINE ? `videos/${esc(it.video_id)}.mp4` : `/media/${esc(it.video_id)}?v=3`}"></video>
+      <div id="clipbox" style="display:none;padding:8px 10px;border-bottom:1px solid var(--line);background:#101726">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <b style="font-size:13px" id="cliptitle">证据片段</b>
+          <span class="hint">（小体积预切片段，加载快；±2 秒上下文）</span>
+          <button onclick="closeClip()" style="margin-left:auto;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:2px 10px;cursor:pointer">关闭</button>
+        </div>
+        <video id="clipvideo" controls preload="auto" style="width:100%;max-height:32vh;background:#000"></video>
+      </div>
+      <div class="timeline" id="timeline">
+        ${ivs.map(iv => seg(iv[0], iv[1], 'tl-evidence')).join('')}
+        ${localIvs.map(iv => seg(iv[0], iv[1], 'tl-local')).join('')}
+        ${views.map(vw => seg(vw.start, vw.end, 'tl-view')).join('')}
+        <div class="playhead" id="playhead" style="left:0%"></div>
+      </div>
+      <div class="controls">
+        <button onclick="playAll()">▶ 播放全片</button>
+        ${ivs.map((iv, k) => `<button onclick="playInterval(${k})">▶ 证据${k + 1} [${fmt(iv[0])}-${fmt(iv[1])}]</button>`).join('')}
+        <label class="hint"><input type="checkbox" id="loopbox" onchange="state.loop=this.checked"> 区间循环</label>
+        <span class="time" id="clock">0:00.0 / ${fmt(dur)}</span>
+        <span class="hint">绿=API证据 黄=本地30B 蓝=模型检查过的视图</span>
+        <span class="spacer" style="margin-left:auto"></span>
+        <button onclick="select(state.idx - 1)">← 上一题</button>
+        <button onclick="select(state.idx + 1)">下一题 →</button>
+      </div>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <h3>QA 信息 <span class="spacer"></span>
+          <span class="badge">${esc(it.qa.task_domain || '')}</span>
+          <span class="badge">${esc(it.qa.task_type || '')}</span>
+          ${v1badge(v1api, 'API')} ${v1badge(v1local, '本地')}
+        </h3>
+        <div class="qa-question">${esc(tr(it.qa.question_zh, it.qa.question) || '?')}</div>
+        ${(it.qa.candidates || []).map((c, ci) => {
+          const text = tr((it.qa.candidates_zh || [])[ci], c);
+          const letter = (text.match(/^([A-D])/) || c.match(/^([A-D])/) || [])[1];
+          return `<div class="opt"><span class="letter">${esc(letter || '')}</span>${esc(text.replace(/^[A-D]\.\s*/, ''))}</div>`;
+        }).join('')}
+        <details style="margin-top:8px">
+          <summary style="color:var(--gold)">显示正确答案（先自行判断再看）</summary>
+          <div class="opt gold" style="margin-top:6px">正确答案：<b style="color:var(--gold)">${esc(it.qa.answer || '?')}</b></div>
+        </details>
+      </div>
+
+      <div class="card">
+        <h3>视频信息</h3>
+        <div class="kv">
+          <span class="k">video_id</span><span class="mono">${esc(it.video_id)}</span>
+          <span class="k">时长</span><span>${fmt(it.video.duration_s)}（${esc(it.video.video_duration || '')}）</span>
+          <span class="k">分辨率/帧率</span><span>${it.video.width || '?'}×${it.video.height || '?'} @ ${it.video.fps || '?'}fps</span>
+          <span class="k">领域</span><span>${esc(it.video.domain || '')} / ${esc(it.video.sub_category || '')}</span>
+          <span class="k">音轨</span><span>${it.video.has_audio ? '有' : '无'} ${esc((it.video.audio_class || []).join(', '))}</span>
+        </div>
+        <details style="margin-top:8px"><summary>数据集视频概述（中文）</summary>
+          <div class="scroll">${esc(tr(it.video.video_caption_zh, it.video.video_caption))}</div>
+          <details><summary>英文原文</summary><div class="scroll">${esc(it.video.video_caption || '')}</div></details></details>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>API 标注结果 <span class="spacer"></span>
+        <span class="badge ${anno.status === 'submitted' ? 'ok' : 'bad'}">${esc(anno.status)}</span>
+        <span class="badge">置信度 ${anno.confidence ?? '—'}</span>
+        <span class="badge">inspect ${anno.inspect_calls ?? 0} 次</span>
+        <span class="badge">turns ${anno.turns ?? 0}</span>
+        <span class="badge">耗时 ${anno.elapsed_s ? Math.round(anno.elapsed_s) + 's' : '—'}</span>
+        ${runs.length > 1 ? `<span class="badge warn">重复运行 ${runs.length} 次</span>` : ''}
+      </h3>
+      ${runs.length > 1 ? `
+        <div class="hint" style="margin-bottom:6px">本题被跑了 ${runs.length} 次（pilot 分片重叠），结果可能不同，点击切换对比：</div>
+        <div style="margin-bottom:8px">${runs.map((r, k) => {
+          const iv = (r.annotation.clue_intervals || []).map(x => `${fmt(x[0])}-${fmt(x[1])}`).join(', ') || '无';
+          return `<button onclick="selectRun(${k})" style="margin-right:6px;border:1px solid ${k === ri ? 'var(--accent)' : 'var(--line)'};background:${k === ri ? 'var(--accent)' : 'var(--panel2)'};color:${k === ri ? '#06101f' : 'var(--text)'};border-radius:8px;padding:4px 10px;cursor:pointer;font-size:12px">
+            第${k + 1}次 (${esc(r.shard)}${r.primary ? ' ★主结果' : ''}) ${iv} · ${r.annotation.turns ?? '?'}轮</button>`;
+        }).join('')}</div>` : ''}
+      <div>${ivs.map((iv, k) => `<span class="iv" onclick="playInterval(${k})" title="在完整视频中跳转播放">▶ 全片 ${fmt(iv[0])} - ${fmt(iv[1])}</span>
+        <button onclick="playClip(${k})" style="margin-right:8px;background:var(--green);color:#04140d;border:none;border-radius:999px;padding:3px 10px;cursor:pointer;font-size:12px;font-weight:600">▶ 片段 ${k + 1}</button>`).join('') || '<span class="hint">无区间</span>'}</div>
+      <div class="obs">${esc(tr(obsZh, anno.observation) || '（无观察）')}</div>
+      ${obsZh ? `<details><summary>英文原文</summary><div class="obs">${esc(anno.observation || '')}</div></details>` : ''}
+      ${(anno.interval_adjustments || []).length ? `<div class="hint" style="margin-top:6px">区间被规范化调整：${esc(JSON.stringify(anno.interval_adjustments))}</div>` : ''}
+      <details style="margin-top:8px"><summary>模型交互过程（${events.length} 步${active ? '，' + esc(active.shard) + ' 分片' : ''}）</summary>
+        <div class="events">${events.map(e => `<div class="row"><span class="turn">T${e.turn}</span><span>${esc(e.kind)}</span>
+          <span class="mono">${e.view ? `[${fmt(e.view.start)}-${fmt(e.view.end)}] ${e.view.max_pixels}px ${e.view.modality}` : ''}${e.error ? esc(e.error) : ''}${e.intervals ? esc(JSON.stringify(e.intervals)) : ''}</span></div>`).join('')}
+        </div></details>
+    </div>
+
+    <div class="card">
+      <h3>本地 30B 对照 <span class="spacer"></span>${it.local ? `<span class="badge">inspect ${it.local.inspect_calls ?? 0}</span><span class="badge">turns ${it.local.turns ?? 0}</span>` : ''}</h3>
+      ${it.local ? `
+        <div>${localIvs.map((iv, k) => `<span class="iv" onclick="playLocal(${k})">▶ ${fmt(iv[0])} - ${fmt(iv[1])}</span>`).join('') || '<span class="hint">无区间</span>'}</div>
+        <div class="obs">${esc(tr(it.local.observation_zh, it.local.observation) || '（无观察）')}</div>
+        ${it.local.observation_zh ? `<details><summary>英文原文</summary><div class="obs">${esc(it.local.observation || '')}</div></details>` : ''}`
+      : '<div class="hint">本地结果中没有该题（可能尚未完成或状态非 submitted）</div>'}
+    </div>
+
+    <div class="card">
+      <h3>模型读到的 caption（时间戳描述，中文）<span class="spacer"></span>
+        <span class="badge">${it.caption.chars} 字符</span><span class="badge">${it.caption.seconds ? Math.round(it.caption.seconds) + 's' : '复用'}</span>
+      </h3>
+      <details open><summary>展开查看（人工可核对 caption 是否准确）</summary>
+        <div class="scroll">${esc(tr(it.caption.text_zh, it.caption.text) || '（本题走 survey 兜底，无 caption）')}</div>
+        ${it.caption.text_zh ? `<details><summary>英文原文</summary><div class="scroll">${esc(it.caption.text || '')}</div></details>` : ''}
+      </details>
+    </div>
+
+    <div class="verdictbar">
+      ${['sufficient','partial','insufficient','unsure'].map(k =>
+        `<button class="${v && v.verdict === k ? 'active' : ''}" onclick="setVerdict('${k}')">${verdictName(k)} <span class="hint">(${['sufficient','partial','insufficient','unsure'].indexOf(k) + 1})</span></button>`).join('')}
+      <input id="note" placeholder="备注（可选）" value="${v ? esc(v.note || '') : ''}">
+      <input id="reviewer" placeholder="检查人" style="max-width:110px" value="${esc(state.reviewer)}">
+      <button onclick="saveVerdict()">保存</button>
+      <span class="saved" id="savedmsg">${v ? '已保存：' + verdictName(v.verdict) : ''}</span>
+    </div>
+  `;
+  const video = $('video');
+  video.addEventListener('timeupdate', () => {
+    const d = video.duration || dur;
+    $('playhead').style.left = (video.currentTime / d * 100) + '%';
+    $('clock').textContent = `${fmt(video.currentTime)} / ${fmt(d)}`;
+    if (state.activeIv) {
+      const [, a, b] = state.activeIv;
+      if (video.currentTime >= b) {
+        if (state.loop) video.currentTime = a;
+        else { video.pause(); state.activeIv = null; }
+      }
+    }
+  });
+  $('timeline').addEventListener('click', (ev) => {
+    const rect = ev.currentTarget.getBoundingClientRect();
+    const frac = (ev.clientX - rect.left) / rect.width;
+    video.currentTime = frac * (video.duration || dur);
+  });
+}
+
+function exportVerdicts() {
+  const rows = Object.values(state.verdicts);
+  const blob = new Blob([rows.map(r => JSON.stringify(r)).join('\n') + '\n'], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'verdicts.jsonl';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+function selectRun(k) {
+  const it = state.items[state.idx];
+  state.runIdx[it.question_id] = k;
+  state.activeIv = null;
+  renderDetail();
+}
+function playClip(k) {
+  const it = state.items[state.idx];
+  const runs = it.runs || []; const ri = state.runIdx[it.question_id] || 0;
+  const anno = runs.length ? runs[ri].annotation : it.annotation;
+  const iv = (anno.clue_intervals || [])[k];
+  const box = $('clipbox'); box.style.display = 'block';
+  const v = $('clipvideo');
+  const base = OFFLINE ? `clips/${it.question_id.replace('::', '_')}_${k}.mp4` : `/clip/${encodeURIComponent(it.question_id)}/${k}`;
+  v.src = base;
+  $('cliptitle').textContent = `证据片段 ${k + 1}: ${fmt(iv[0])} - ${fmt(iv[1])}`;
+  v.play().catch(() => {});
+  v.scrollIntoView({ block: 'nearest' });
+}
+function closeClip() { const v = $('clipvideo'); v.pause(); v.removeAttribute('src'); v.load(); $('clipbox').style.display = 'none'; }
+function playAll() { const v = $('video'); state.activeIv = null; v.play(); }
+function playInterval(k) {
+  const it = state.items[state.idx];
+  const runs = it.runs || []; const ri = state.runIdx[it.question_id] || 0;
+  const anno = runs.length ? runs[ri].annotation : it.annotation;
+  const iv = (anno.clue_intervals || [])[k];
+  const v = $('video'); v.currentTime = iv[0]; state.activeIv = ['api', iv[0], iv[1]]; v.play();
+}
+function playLocal(k) {
+  const it = state.items[state.idx]; const iv = it.local.clue_intervals[k];
+  const v = $('video'); v.currentTime = iv[0]; state.activeIv = ['local', iv[0], iv[1]]; v.play();
+}
+
+function setVerdict(k) {
+  const it = state.items[state.idx];
+  state.verdicts[it.question_id] = { ...(state.verdicts[it.question_id] || {}), question_id: it.question_id, verdict: k, note: $('note').value };
+  renderList(); renderDetail();
+}
+
+async function saveVerdict() {
+  const it = state.items[state.idx];
+  const v = state.verdicts[it.question_id];
+  if (!v || !v.verdict) { $('savedmsg').textContent = '请先选择判定'; return; }
+  state.reviewer = $('reviewer').value; localStorage.setItem('reviewer', state.reviewer);
+  if (OFFLINE) {
+    state.verdicts[it.question_id] = { question_id: it.question_id, verdict: v.verdict, note: $('note').value, reviewer: state.reviewer };
+    localStorage.setItem('review_verdicts', JSON.stringify(state.verdicts));
+    $('savedmsg').textContent = '已保存到浏览器（离线模式）';
+    renderList();
+    return;
+  }
+  const body = { question_id: it.question_id, verdict: v.verdict, note: $('note').value, reviewer: state.reviewer };
+  const res = await fetch('/api/verdict', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await res.json();
+  state.verdicts[it.question_id] = data.verdict;
+  $('savedmsg').textContent = '已保存 ✓';
+  renderList();
+}
+
+document.addEventListener('keydown', (ev) => {
+  if (ev.target.tagName === 'INPUT' || ev.target.tagName === 'TEXTAREA') return;
+  const keys = { '1': 'sufficient', '2': 'partial', '3': 'insufficient', '4': 'unsure' };
+  if (keys[ev.key]) { setVerdict(keys[ev.key]); return; }
+  if (ev.key === 'ArrowDown' || ev.key === 'PageDown') { ev.preventDefault(); select(Math.min(state.idx + 1, state.items.length - 1)); }
+  if (ev.key === 'ArrowUp' || ev.key === 'PageUp') { ev.preventDefault(); select(Math.max(state.idx - 1, 0)); }
+  if (ev.key === ' ') { ev.preventDefault(); const v = $('video'); v.paused ? v.play() : v.pause(); }
+});
+
+async function loadStats() {
+  let s = {};
+  let progress = null;
+  if (OFFLINE) {
+    s = window.REVIEW_STATS || {};
+  } else {
+    try { s = await (await fetch('/api/stats')).json(); } catch (e) { s = {}; }
+    try { progress = await (await fetch('/api/progress')).json(); } catch (e) { progress = null; }
+  }
+  if (!s.questions) {
+    $('stats').innerHTML = progress ? `
+      <div class="statgrid"><div class="card">
+        <h3>运行进度（实时）</h3>
+        <div class="bignum">${progress.total}<small> / ${progress.expected} 题已完成</small></div>
+        <table><tbody>${Object.entries(progress.status).map(([k, v]) => `<tr><td>${k}</td><td class="num">${v}</td></tr>`).join('')}</tbody></table>
+        <div class="hint" style="margin-top:6px">分片进度：${progress.shards.map(x => `${x.shard} ${x.rows}/${x.expected}`).join(' · ')}</div>
+      </div></div>` : '<div class="card">暂无统计数据（离线包未包含）</div>';
+    return;
+  }
+  $('stats').dataset.loaded = '1';
+  const hist = (h, total, color) => Object.entries(h).map(([k, v]) =>
+    `<tr><td class="num">${k}</td><td class="num">${v}</td><td><span class="bar" style="width:${total ? v / total * 100 : 0}%;background:${color || 'var(--accent)'}"></span></td></tr>`).join('');
+  const kv = (o, keys) => keys.map(([k, label]) => `<tr><td>${label}</td><td class="num">${o[k] ?? '—'}</td></tr>`).join('');
+  const d = (x) => x ? `${x.mean} / ${x.median} / ${x.p90}` : '—';
+  $('stats').innerHTML = `
+  <div class="statgrid">
+    <div class="card">
+      <h3>总览</h3>
+      <div class="bignum">${s.questions.submitted}<small> / ${s.questions.total} 题提交成功</small></div>
+      <table><tbody>
+        ${Object.entries(s.questions.status).map(([k, v]) => `<tr><td>${k}</td><td class="num">${v}</td></tr>`).join('')}
+        <tr><td>唯一视频</td><td class="num">${s.questions.unique_videos}</td></tr>
+      </tbody></table>
+      <div class="hint" style="margin-top:6px">领域分布：${Object.entries(s.domains).map(([k, v]) => `${k} ${v}`).join(' · ')}</div>
+    </div>
+
+    <div class="card">
+      <h3>工具调用 inspect（每题成功送达的媒体查看）</h3>
+      <div class="bignum">${s.tool_calls.inspect.mean}<small> 次/题（中位 ${s.tool_calls.inspect.median}，p90 ${s.tool_calls.inspect.p90}）</small></div>
+      <table><thead><tr><th class="num">次数</th><th class="num">题数</th><th></th></tr></thead>
+        <tbody>${hist(s.tool_calls.inspect.histogram, s.tool_calls.inspect.n, 'var(--green)')}</tbody></table>
+      <div class="hint">合计 ${s.tool_calls.inspect_total} 次；0 次 inspect 的题 ${s.tool_calls.zero_inspect}；被拒绝 ${s.tool_calls.rejections_total} 次
+        ${Object.entries(s.tool_calls.rejections_by_reason).map(([k, v]) => `<br>· ${k} ×${v}`).join('')}
+        <br>get_media_info 调用 ${s.tool_calls.get_media_info} 次</div>
+    </div>
+
+    <div class="card">
+      <h3>交互轮次与耗时</h3>
+      <table><tbody>
+        <tr><td>turns/题（均值/中位/p90）</td><td class="num">${d(s.turns.per_question)}</td></tr>
+        <tr><td>turns 合计</td><td class="num">${s.turns.total}</td></tr>
+        <tr><td>单题耗时 s（均值/中位/p90）</td><td class="num">${d(s.turns.elapsed_seconds)}</td></tr>
+        <tr><td>最长单题</td><td class="num">${s.turns.elapsed_seconds.max}s</td></tr>
+      </tbody></table>
+      <table style="margin-top:8px"><thead><tr><th class="num">turns</th><th class="num">题数</th><th></th></tr></thead>
+        <tbody>${hist(s.turns.per_question.histogram, s.turns.per_question.n)}</tbody></table>
+    </div>
+
+    <div class="card">
+      <h3>API 调用量</h3>
+      <table><tbody>
+        <tr><td>caption 生成（最终轮）</td><td class="num">${s.api_calls.caption_generated_final}</td></tr>
+        <tr><td>caption 复用（缓存命中）</td><td class="num">${s.api_calls.caption_reused_final}</td></tr>
+        <tr><td>caption 兜底 survey</td><td class="num">${s.api_calls.caption_fallback_survey}</td></tr>
+        <tr><td>agent 轮次合计</td><td class="num">${s.api_calls.agent_turns}</td></tr>
+        <tr><td><b>最终轮合计 / 每题</b></td><td class="num"><b>${s.api_calls.total_final_run} / ${s.api_calls.per_question_final_run}</b></td></tr>
+        <tr><td>含重启重跑的真实 caption 调用</td><td class="num">${s.api_calls.caption_calls_including_restarts}</td></tr>
+      </tbody></table>
+      <div class="hint">重启会重新生成 caption（缓存跨进程失效，已修复）：修复后全量预计 ≈1 次 caption/题</div>
+    </div>
+
+    <div class="card">
+      <h3>caption 质量</h3>
+      <table><tbody>
+        <tr><td>attempts/题（均值/中位/p90）</td><td class="num">${d(s.caption_quality.attempts)}</td></tr>
+        <tr><td>字符数（均值/中位/p90）</td><td class="num">${d(s.caption_quality.chars)}</td></tr>
+        <tr><td>生成耗时 s（均值/中位）</td><td class="num">${s.caption_quality.generated_seconds.mean} / ${s.caption_quality.generated_seconds.median}</td></tr>
+        <tr><td>截断 / 无效</td><td class="num">${s.caption_quality.truncated} / ${s.caption_quality.invalid}</td></tr>
+      </tbody></table>
+      <div style="margin-top:6px">
+        <table><thead><tr><th class="num">attempts</th><th class="num">题数</th><th></th></tr></thead>
+        <tbody>${hist(s.caption_quality.attempts.histogram, s.caption_quality.attempts.n, 'var(--amber)')}</tbody></table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>标注产出</h3>
+      <table><tbody>
+        <tr><td>区间数/题（均值/中位/p90）</td><td class="num">${d(s.annotations.intervals_per_question)}</td></tr>
+        <tr><td>区间时长 s（均值/中位/p90）</td><td class="num">${d(s.annotations.interval_length_seconds)}</td></tr>
+        <tr><td>区间总数</td><td class="num">${s.annotations.interval_length_seconds.n}</td></tr>
+        <tr><td>observation 字符（均值/中位）</td><td class="num">${s.annotations.observation_chars.mean} / ${s.annotations.observation_chars.median}</td></tr>
+        <tr><td>confidence（均值/中位）</td><td class="num">${s.annotations.confidence.mean} / ${s.annotations.confidence.median}</td></tr>
+      </tbody></table>
+      <table style="margin-top:8px"><thead><tr><th class="num">区间数</th><th class="num">题数</th><th></th></tr></thead>
+        <tbody>${hist(s.annotations.intervals_per_question.histogram, s.annotations.intervals_per_question.n, 'var(--green)')}</tbody></table>
+    </div>
+
+    <div class="card">
+      <h3>与本地 30B 对照（同题 ${s.comparison_local_30b.same_questions} 题）</h3>
+      <table><thead><tr><th></th><th class="num">API</th><th class="num">本地30B</th></tr></thead><tbody>
+        <tr><td>inspect 均值</td><td class="num">${s.comparison_local_30b.api_inspect_mean}</td><td class="num">${s.comparison_local_30b.local_inspect_mean}</td></tr>
+        <tr><td>turns 均值</td><td class="num">${s.comparison_local_30b.api_turns_mean}</td><td class="num">${s.comparison_local_30b.local_turns_mean}</td></tr>
+      </tbody></table>
+      <div class="hint" style="margin-top:6px">区间 IoU 中位 ${s.comparison_local_30b.interval_iou_median}；IoU&gt;0.3 的题 ${s.comparison_local_30b.interval_iou_over_03}/${s.comparison_local_30b.same_questions}（两后端定位差异大，需人工判定）</div>
+    </div>
+
+    <div class="card">
+      <h3>V1 自动裁判（同题对照，进行中）</h3>
+      <table><thead><tr><th>后端</th><th class="num">已判</th><th class="num">充分</th><th class="num">充分率</th></tr></thead><tbody>
+        <tr><td>API</td><td class="num">${s.v1_auto_judge.api.verified}</td><td class="num">${s.v1_auto_judge.api.sufficient}</td><td class="num">${s.v1_auto_judge.api.rate != null ? (s.v1_auto_judge.api.rate * 100).toFixed(0) + '%' : '—'}</td></tr>
+        <tr><td>本地 30B</td><td class="num">${s.v1_auto_judge.local.verified}</td><td class="num">${s.v1_auto_judge.local.sufficient}</td><td class="num">${s.v1_auto_judge.local.rate != null ? (s.v1_auto_judge.local.rate * 100).toFixed(0) + '%' : '—'}</td></tr>
+      </tbody></table>
+      <div class="hint">V1：把单个证据区间喂给裁判模型，看它能否答对原题；能答对=区间充分。仅完成部分题目。</div>
+    </div>
+
+    <div class="card">
+      <h3>⚠️ pilot 分片重复说明</h3>
+      <table><tbody>
+        <tr><td>唯一题目</td><td class="num">${s.pilot_sharding.questions}</td></tr>
+        <tr><td>被重复运行的题</td><td class="num">${s.pilot_sharding.duplicated_questions}</td></tr>
+        <tr><td>两次区间不同的题</td><td class="num">${s.pilot_sharding.duplicated_with_different_intervals}</td></tr>
+        <tr><td>合并取值规则</td><td class="num">${esc(s.pilot_sharding.rule || '')}</td></tr>
+      </tbody></table>
+      <div class="hint" style="margin-top:6px">${esc(s.pilot_sharding.note || '')}</div>
+      <div class="hint">因此"API 调用量"等总量含重复；单题质量应以人工检查页的运行切换器对比为准。</div>
+    </div>
+
+    <div class="card">
+      <h3>事件统计（最终轮）</h3>
+      <table><tbody>${Object.entries(s.events).map(([k, v]) => `<tr><td>${k}</td><td class="num">${v}</td></tr>`).join('')}</tbody></table>
+    </div>
+  </div>`;
+}
+
+boot();
+</script>
+</body>
+</html>
