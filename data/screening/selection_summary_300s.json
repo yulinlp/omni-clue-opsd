@@ -1,0 +1,14 @@
+{
+ "selected": 1500,
+ "videos": 1036,
+ "full_accuracy": 0.4213,
+ "gold_accuracy": 0.6133,
+ "accuracy_gap_pp": 19.2,
+ "delta_p_mean": 0.1664,
+ "tiers": {
+  "A": 288,
+  "B": 404,
+  "D": 808
+ },
+ "max_duration": 300.0
+}

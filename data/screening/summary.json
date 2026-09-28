@@ -1,0 +1,206 @@
+{
+ "overall": {
+  "questions": 2717,
+  "full_accuracy": 0.4752,
+  "gold_accuracy": 0.4987,
+  "accuracy_gap_pp": 2.36,
+  "delta_p_mean": 0.0197,
+  "delta_p_median": 0.0013,
+  "delta_p_positive": 1433,
+  "delta_p_ge_0.1": 679,
+  "flips_full_wrong_to_gold_right": 288,
+  "flips_gold_wrong_to_full_right": 224,
+  "mcnemar_p": 0.0053,
+  "tiers": {
+   "A": 288,
+   "D": 1801,
+   "C": 224,
+   "B": 404
+  },
+  "videos": 1436
+ },
+ "per_task": {
+  "Spatial Relation": {
+   "n": 166,
+   "full": 0.3434,
+   "gold": 0.3554,
+   "delta_acc": 0.012,
+   "delta_p": 0.0362
+  },
+  "Object Counting": {
+   "n": 163,
+   "full": 0.3252,
+   "gold": 0.3865,
+   "delta_acc": 0.061,
+   "delta_p": 0.0296
+  },
+  "Attribute Recognition": {
+   "n": 154,
+   "full": 0.5974,
+   "gold": 0.6104,
+   "delta_acc": 0.013,
+   "delta_p": 0.0339
+  },
+  "Temporal Localization": {
+   "n": 149,
+   "full": 0.3893,
+   "gold": 0.2819,
+   "delta_acc": -0.107,
+   "delta_p": -0.0905
+  },
+  "Event Sorting": {
+   "n": 147,
+   "full": 0.4966,
+   "gold": 0.551,
+   "delta_acc": 0.054,
+   "delta_p": 0.024
+  },
+  "Action Counting": {
+   "n": 134,
+   "full": 0.3433,
+   "gold": 0.3806,
+   "delta_acc": 0.037,
+   "delta_p": 0.0197
+  },
+  "Human Interaction": {
+   "n": 121,
+   "full": 0.438,
+   "gold": 0.4463,
+   "delta_acc": 0.008,
+   "delta_p": 0.0125
+  },
+  "Causal Reasoning": {
+   "n": 121,
+   "full": 0.6033,
+   "gold": 0.5455,
+   "delta_acc": -0.058,
+   "delta_p": -0.0237
+  },
+  "Audio Recognition": {
+   "n": 111,
+   "full": 0.5495,
+   "gold": 0.5315,
+   "delta_acc": -0.018,
+   "delta_p": 0.0107
+  },
+  "Audio Source Localization": {
+   "n": 108,
+   "full": 0.5185,
+   "gold": 0.6019,
+   "delta_acc": 0.083,
+   "delta_p": 0.0797
+  },
+  "Attribute Reasoning": {
+   "n": 107,
+   "full": 0.5607,
+   "gold": 0.5794,
+   "delta_acc": 0.019,
+   "delta_p": 0.0164
+  },
+  "Event Recognition": {
+   "n": 104,
+   "full": 0.5769,
+   "gold": 0.5769,
+   "delta_acc": 0.0,
+   "delta_p": -0.0076
+  },
+  "Text and Diagram Understanding": {
+   "n": 104,
+   "full": 0.5481,
+   "gold": 0.5962,
+   "delta_acc": 0.048,
+   "delta_p": 0.0328
+  },
+  "Human-object Interaction": {
+   "n": 97,
+   "full": 0.4227,
+   "gold": 0.5361,
+   "delta_acc": 0.113,
+   "delta_p": 0.0825
+  },
+  "Temporal Prediction": {
+   "n": 96,
+   "full": 0.5208,
+   "gold": 0.5833,
+   "delta_acc": 0.062,
+   "delta_p": 0.0249
+  },
+  "Human Emotions": {
+   "n": 88,
+   "full": 0.5227,
+   "gold": 0.5114,
+   "delta_acc": -0.011,
+   "delta_p": -0.006
+  },
+  "Emotion Change": {
+   "n": 87,
+   "full": 0.5172,
+   "gold": 0.5632,
+   "delta_acc": 0.046,
+   "delta_p": 0.0285
+  },
+  "Object State Change": {
+   "n": 84,
+   "full": 0.5,
+   "gold": 0.5357,
+   "delta_acc": 0.036,
+   "delta_p": 0.0155
+  },
+  "Object Existence Recognition": {
+   "n": 81,
+   "full": 0.5556,
+   "gold": 0.642,
+   "delta_acc": 0.086,
+   "delta_p": 0.0477
+  },
+  "Audio Counting": {
+   "n": 81,
+   "full": 0.3827,
+   "gold": 0.3951,
+   "delta_acc": 0.012,
+   "delta_p": 0.0143
+  },
+  "Audio Change": {
+   "n": 78,
+   "full": 0.3718,
+   "gold": 0.3718,
+   "delta_acc": 0.0,
+   "delta_p": -0.0088
+  },
+  "Hallucination": {
+   "n": 76,
+   "full": 0.3816,
+   "gold": 0.4342,
+   "delta_acc": 0.053,
+   "delta_p": 0.0396
+  },
+  "Relation Reasoning": {
+   "n": 75,
+   "full": 0.5333,
+   "gold": 0.48,
+   "delta_acc": -0.053,
+   "delta_p": 0.0051
+  },
+  "Anomaly Recognition": {
+   "n": 71,
+   "full": 0.3944,
+   "gold": 0.493,
+   "delta_acc": 0.099,
+   "delta_p": 0.0609
+  },
+  "Scene Recognition": {
+   "n": 70,
+   "full": 0.5857,
+   "gold": 0.6286,
+   "delta_acc": 0.043,
+   "delta_p": 0.056
+  },
+  "Video Emotions": {
+   "n": 44,
+   "full": 0.5682,
+   "gold": 0.6591,
+   "delta_acc": 0.091,
+   "delta_p": 0.0541
+  }
+ }
+}
