@@ -1,3 +1,5 @@
+> **2026-10-09 交接更新：请先阅读 [HADOFF.md](HADOFF.md)。** 本页保留早期流程；最新 1000 题实验、结果、迁移步骤及未上传资产以交接文档为准。
+
 # omni-clue-opsd — WorldSense 证据条件增益筛选与 CLUE-OPSD 训练交接文档
 
 > **交接日期**：2026-09-25
@@ -433,6 +435,7 @@ bash scripts/run_worldsense_sft_lora_gpu07.sh
 | --- | --- |
 | `WORLDSENSE_EVIDENCE_GAP_SCREENING.zh-CN.md` | 筛选方案全文（本文 §5/6 的详细版） |
 | `Train_Settings.md` | 训练参数与设置汇总（SFT/OPSD/Clue-OPSD） |
+| `NPU_TRAINING_LAUNCH_GUIDE.zh-CN.md` | 当前 ModelArts 环境的 SFT / CLUE-OPSD 手动启动命令与核心脚本入门说明 |
 | `WORLDSENSE_ANNOTATION_AND_V1_WALKTHROUGH.zh-CN.md` | 标注流程与 V1 验证实战 |
 | `WORLDSENSE_EVIDENCE_ANNOTATION_PLAN.zh-CN.md` | 标注方案设计 |
 | `OMNI_MULTIMODAL_NOTES.zh-CN.md` | 多模态入门笔记（token/patch/base64/ffmpeg 基础） |

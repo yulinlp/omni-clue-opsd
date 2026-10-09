@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""Build WorldSense CLUE-OPSD rows from the screened SFT set and annotations."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+from pathlib import Path
+
+from omni_opsd.data.dynamic_budget import dynamic_clue_budget_for
+
+
+def allocate_frames(spans: list[list[float]], total: int) -> list[int]:
+    pairs = total // 2
+    durations = [end - start for start, end in spans]
+    raw = [pairs * duration / sum(durations) for duration in durations]
+    result = [1] * len(spans)
+    for _ in range(pairs - len(spans)):
+        index = max(range(len(spans)), key=lambda i: raw[i] - result[i])
+        result[index] += 1
+    return [2 * value for value in result]
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--sft", type=Path, required=True)
+    parser.add_argument("--annotation", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--answer-conditioned", action="store_true",
+                        help="add gold answer metadata, privileged teacher answer and direct-letter prompts")
+    args = parser.parse_args()
+
+    annotations = {
+        row["question_id"]: row
+        for line in args.annotation.open(encoding="utf-8")
+        if (row := json.loads(line)).get("status") == "submitted"
+    }
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    count = 0
+    with args.sft.open(encoding="utf-8") as source, args.output.open("w", encoding="utf-8") as target:
+        for line in source:
+            sft = json.loads(line)
+            case_id = sft["case_id"]
+            full = sft["videos"][0]
+            annotation = annotations[case_id]
+            duration = float(full["video_end"]) - float(full["video_start"])
+            spans = [[max(0.0, float(a)), min(duration, float(b))]
+                     for a, b in annotation["clue_intervals"]]
+            if not spans or any(b <= a for a, b in spans):
+                raise ValueError(f"bad clue intervals: {case_id}: {spans}")
+            budget = dynamic_clue_budget_for({
+                "duration": duration,
+                "metadata": {"resolution": sft["dynamic_student_budget"]["source_resolution"]},
+            }, spans)
+            frame_caps = allocate_frames(spans, int(budget["nframes"]))
+            original_prompt = sft["messages"][0]["content"]
+            if args.answer_conditioned:
+                match = re.search(r"<answer>\s*([A-D])\s*</answer>", sft["messages"][-1]["content"])
+                if not match:
+                    raise ValueError(f"missing gold answer: {case_id}")
+                gold = match.group(1)
+                marker = "\nBriefly analyze the video and audio evidence"
+                if marker not in original_prompt:
+                    raise ValueError(f"unexpected SFT prompt: {case_id}")
+                qa_prompt = original_prompt.split(marker, 1)[0]
+                option_count = len(re.findall(r"^[A-D]\. ", qa_prompt, flags=re.MULTILINE))
+                if option_count not in (3, 4) or gold not in "ABCD"[:option_count]:
+                    raise ValueError(f"invalid options or gold answer: {case_id}")
+                instruction = "Reply with exactly one uppercase option letter. No explanation or tags."
+                student_prompt = qa_prompt + "\n" + instruction
+                teacher_prompt = ("\n".join(["<video>"] * len(spans))
+                                  + "\n" + qa_prompt.split("\n", 1)[1]
+                                  + f"\nVerified correct option: {gold}.\n" + instruction)
+            else:
+                gold = None
+                student_prompt = original_prompt
+                teacher_prompt = ("\n".join(["<video>"] * len(spans))
+                                  + "\n" + original_prompt.split("\n", 1)[1])
+            teacher_videos = [{
+                "video": full["video"],
+                "video_start": start,
+                "video_end": end,
+                "nframes": cap,
+                "resized_height": budget["resized_height"],
+                "resized_width": budget["resized_width"],
+                "min_pixels": 3136,
+                "max_pixels": budget["resized_height"] * budget["resized_width"],
+            } for (start, end), cap in zip(spans, frame_caps)]
+            contract = dict(sft["sampling_contract"])
+            contract.update({
+                "answer_label_in_model_row": False,
+                "teacher_view": "annotated-clue-intervals",
+                "teacher_frame_cap_total": sum(frame_caps),
+                "teacher_frame_caps": frame_caps,
+                "teacher_dynamic_video_budget": budget["visual_budget_tokens"],
+                "teacher_dynamic_audio_budget": budget["audio_budget_tokens"],
+                "teacher_dynamic_reserved_tokens": budget["reserved_tokens"],
+            })
+            result = {
+                "messages": [{"role": "user", "content": student_prompt}],
+                "videos": sft["videos"],
+                "teacher_prompt": teacher_prompt,
+                "teacher_videos": teacher_videos,
+                "clue_intervals": spans,
+                "prompt_id": case_id,
+                "case_id": case_id,
+                "video_id": sft["video_id"],
+                "response_format": "reasoning",
+                "experiment_arm": "clue_opsd",
+                "sampling_contract": contract,
+                "dynamic_student_budget": sft["dynamic_student_budget"],
+                "dynamic_teacher_budget": budget,
+                "supervision_contract": {
+                    "kind": ("gold-answer-conditioned-clue-gkd" if args.answer_conditioned
+                             else "reasoning-clue-on-policy-self-distillation"),
+                    "gold_answer_in_student_target": False,
+                    "gold_answer_in_teacher_prompt": args.answer_conditioned,
+                    "gold_answer_in_auxiliary_loss": args.answer_conditioned,
+                    "teacher_view": "annotated-clue-intervals",
+                    "teacher_completion": "student_on_policy_completion_token_ids",
+                },
+            }
+            if args.answer_conditioned:
+                result["gold_answer"] = gold
+                # ms-swift retains `solution` across its row preprocessor for
+                # RLHF tasks; arbitrary metadata such as `gold_answer` is dropped.
+                result["solution"] = gold
+            target.write(json.dumps(result, ensure_ascii=False) + "\n")
+            count += 1
+    print(f"wrote {count} CLUE-OPSD rows to {args.output}")
+
+
+if __name__ == "__main__":
+    main()

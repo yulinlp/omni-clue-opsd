@@ -12,6 +12,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import random
+import re
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +50,8 @@ def main() -> None:
     parser.add_argument("--max-frames", type=int, default=768)
     parser.add_argument("--min-pixels", type=int, default=3136)
     parser.add_argument("--max-pixels", type=int, default=28672)
+    parser.add_argument("--sample-size", type=int, default=1000)
+    parser.add_argument("--sample-seed", type=int, default=20260930)
     args = parser.parse_args()
 
     source_root = args.source_root.resolve()
@@ -67,9 +71,18 @@ def main() -> None:
         if sample_id in seen_ids:
             raise ValueError(f"duplicate sample id: {sample_id}")
         seen_ids.add(sample_id)
-        choices = [str(choice) for choice in (source.get("options") or [])]
+        choices = [str(choice).strip() for choice in (source.get("options") or [])]
         if len(choices) != 4:
             raise ValueError(f"{sample_id} has {len(choices)} choices, expected 4")
+        # The parquet uses "A.text", "A: text", and "A text". Normalize only
+        # the label punctuation, preserving the answer text in every choice.
+        normalized = []
+        for letter, choice in zip("ABCD", choices):
+            match = re.fullmatch(rf"{letter}(?:[.:]|\s)\s*(.+)", choice)
+            if match is None or not match.group(1).strip():
+                raise ValueError(f"{sample_id} has malformed option {letter}: {choice!r}")
+            normalized.append(f"{letter}. {match.group(1).strip()}")
+        choices = normalized
         answer = str(source.get("correct_option") or "").strip().upper()
         if answer not in {"A", "B", "C", "D"}:
             raise ValueError(f"{sample_id} has invalid correct_option={answer!r}")
@@ -134,6 +147,14 @@ def main() -> None:
         raise RuntimeError(
             f"materialization cardinality mismatch: inputs={len(answer_free)} labels={len(labels)}"
         )
+    if not 1 <= args.sample_size <= len(answer_free):
+        raise ValueError(f"sample-size must be between 1 and {len(answer_free)}")
+    # Draw once from the complete benchmark and keep source order for stable
+    # input/label pairing. Every model evaluated with these files sees the
+    # exact same questions and media settings.
+    selected_indices = sorted(random.Random(args.sample_seed).sample(range(len(answer_free)), args.sample_size))
+    answer_free = [answer_free[index] for index in selected_indices]
+    labels = [labels[index] for index in selected_indices]
 
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -146,7 +167,10 @@ def main() -> None:
         "source_parquet": str(parquet_path),
         "source_parquet_sha256": _sha256(parquet_path),
         "rows": len(answer_free),
-        "unique_sample_ids": len(seen_ids),
+        "source_rows": 1000,
+        "sample_seed": args.sample_seed,
+        "selected_indices": selected_indices,
+        "unique_sample_ids": len({row["case_id"] for row in answer_free}),
         "unique_videos": len({row["video_id"] for row in answer_free}),
         "answer_free_path": str(input_path),
         "labels_path": str(label_path),

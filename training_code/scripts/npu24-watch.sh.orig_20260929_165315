@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Live NPU table for the WorldSense CLUE-OPSD run on npu24 worker-1/2.
+# Usage: bash training_code/scripts/npu24-watch.sh [interval_seconds] [count]
+# count=0 refreshes until Ctrl-C. Run with count=1 for a single snapshot.
+set -uo pipefail
+
+interval="${1:-2}"
+count="${2:-0}"
+[[ "${interval}" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "interval_seconds must be nonnegative" >&2; exit 2; }
+[[ "${count}" =~ ^[0-9]+$ ]] || { echo "count must be a nonnegative integer" >&2; exit 2; }
+
+repo="/opt/huawei/dataset/hyl_ulan/ylhu/omni-clue-opsd"
+run_root="${repo}/training_runs/worldsense_clue_opsd_w1w2"
+snapshot="/opt/huawei/dataset/hyl_ulan/ylhu/omni-opsd-runtime/worldsense_sft_lora_npu24_20260928/scripts/npu-snapshot.sh"
+tmpdir="$(mktemp -d /tmp/npu24-watch.XXXXXX)"
+tty=0
+[[ -t 1 ]] && tty=1
+cleanup() {
+  rm -rf -- "${tmpdir}"
+  [[ "${tty}" == 1 ]] && printf '\033[?25h\n'
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+
+fetch() {
+  local ip="$1" output="$2"
+  ssh -F /dev/null -p 2222 -o BatchMode=yes -o ConnectTimeout=5 \
+    -o StrictHostKeyChecking=accept-new "${ip}" "bash '${snapshot}'" \
+    > "${output}" 2> "${output}.err"
+}
+
+format_card() {
+  local file="$1" card="$2"
+  awk -v key="npu${card}" '$1 == key {printf "%3s / %3s / %4s / %2s", $4, $5, $2, $3; found=1}
+       END {if (!found) printf "n/a"}' "${file}"
+}
+
+progress() {
+  local line
+  line="$(grep -a -o "{'loss'[^}]*}" "${run_root}/worker-1.log" 2>/dev/null | tail -1)"
+  if [[ -z "${line}" ]]; then
+    printf '等待首个训练步…'
+    return
+  fi
+  printf '%s\n' "${line}" | sed -E \
+    "s/^\{'loss': '([^']*)'.*'global_step\/max_steps': '([^']*)'.*'elapsed_time': '([^']*)'.*\}$/loss \1  step \2  elapsed \3/"
+}
+
+if [[ "${tty}" == 1 ]]; then printf '\033[?25l'; fi
+n=0
+while true; do
+  fetch 172.16.12.237 "${tmpdir}/w1" & pid1=$!
+  fetch 172.16.12.70 "${tmpdir}/w2" & pid2=$!
+  wait "${pid1}"; ok1=$?
+  wait "${pid2}"; ok2=$?
+
+  if [[ "${tty}" == 1 ]]; then printf '\033[H\033[J'; fi
+  printf 'npu24 WorldSense CLUE-OPSD (worker-1 + worker-2)  %s  刷新 %ss  Ctrl-C 退出\n' \
+    "$(date +%H:%M:%S)" "${interval}"
+  printf '%-6s | %-32s | %-32s\n' 'NPU' 'worker-1 (AI% / HBM% / W / C)' 'worker-2 (AI% / HBM% / W / C)'
+  printf -- '-------+----------------------------------+----------------------------------\n'
+  for card in 0 1 2 3 4 5 6 7; do
+    w1="$(format_card "${tmpdir}/w1" "${card}")"
+    w2="$(format_card "${tmpdir}/w2" "${card}")"
+    printf 'npu%-3s | %-32s | %-32s\n' "${card}" "${w1}" "${w2}"
+  done
+  printf -- '-------+----------------------------------+----------------------------------\n'
+  printf '训练进度(rank0): %s\n' "$(progress)"
+  [[ "${ok1}" == 0 ]] || printf 'worker-1 SSH 错误: %s\n' "$(head -1 "${tmpdir}/w1.err")"
+  [[ "${ok2}" == 0 ]] || printf 'worker-2 SSH 错误: %s\n' "$(head -1 "${tmpdir}/w2.err")"
+
+  n=$((n + 1))
+  if [[ "${count}" -gt 0 && "${n}" -ge "${count}" ]]; then
+    [[ "${ok1}" == 0 && "${ok2}" == 0 ]] || exit 1
+    break
+  fi
+  sleep "${interval}"
+done

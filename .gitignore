@@ -3,3 +3,21 @@ __pycache__/
 .env
 *.log
 .DS_Store
+
+# Handoff: credentials, media and large binary training state stay outside Git.
+.env.*
+*.pem
+*.key
+*.safetensors
+*.pt
+*.pth
+*.ckpt
+training_args.bin
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.webm
+*.pid
+*.lock
+.pytest_cache/
